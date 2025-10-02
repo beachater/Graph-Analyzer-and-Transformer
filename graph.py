@@ -118,6 +118,10 @@ def visualize_graph(G: nx.Graph, layout_seed: int = 42, highlight_edges=None, hi
     prefix = "Directed " if G.is_directed() else ""
     ttl = title or f"{prefix}{subtype}Graph — |V|={G.number_of_nodes()}, |E|={G.number_of_edges()}"
     plt.title(ttl)
+    # Draw edge weights as labels
+    edge_labels = nx.get_edge_attributes(G, 'weight')
+    if edge_labels:
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='green')
     plt.axis("off")
     st.pyplot(plt, clear_figure=True)
 
@@ -218,7 +222,9 @@ if menu.startswith("1"):
         st.markdown("Enter one edge per line as `u v` or `u v weight`. Click **Create** when done.")
         t = st.text_area("Edges", "0 1\n1 2\n2 0\n1 3", height=150)
         if st.button("Create"):
-            st.session_state.G = parse_edge_list(t, directed=directed, multigraph=multigraph)
+            G_new = parse_edge_list(t, directed=directed, multigraph=multigraph)
+            st.session_state.G = G_new
+            st.session_state.G_original = G_new.copy()
             st.success("Graph created.")
             if show_after:
                 visualize_graph(st.session_state.G, layout_seed=st.session_state.layout_seed)
@@ -227,7 +233,9 @@ if menu.startswith("1"):
         st.markdown("Format per line: `vertex: neighbor1 neighbor2 ...`")
         t = st.text_area("Adjacency List", "0: 1 2\n1: 0 3\n2: 0 3\n3: 1 2", height=150)
         if st.button("Create"):
-            st.session_state.G = parse_adjacency_list(t, directed=directed, multigraph=multigraph)
+            G_new = parse_adjacency_list(t, directed=directed, multigraph=multigraph)
+            st.session_state.G = G_new
+            st.session_state.G_original = G_new.copy()
             st.success("Graph created.")
             if show_after:
                 visualize_graph(st.session_state.G, layout_seed=st.session_state.layout_seed)
@@ -236,7 +244,9 @@ if menu.startswith("1"):
         st.markdown("Paste rows of 0/1 (or weights). Nonzero means edge. Use square matrix.")
         t = st.text_area("Adjacency Matrix", "0 1 1 0\n1 0 0 1\n1 0 0 1\n0 1 1 0", height=150)
         if st.button("Create"):
-            st.session_state.G = parse_adjacency_matrix(t, directed=directed, multigraph=multigraph)
+            G_new = parse_adjacency_matrix(t, directed=directed, multigraph=multigraph)
+            st.session_state.G = G_new
+            st.session_state.G_original = G_new.copy()
             st.success("Graph created.")
             if show_after:
                 visualize_graph(st.session_state.G, layout_seed=st.session_state.layout_seed)
@@ -286,11 +296,11 @@ if menu.startswith("1"):
 # Panel 2: Walk / Path / Cycle
 elif menu.startswith("2"):
     st.header("Check Walk / Path / Cycle")
-    G = st.session_state.G
+    import copy
+    G = copy.deepcopy(st.session_state.get("G_original", None))
     if G is None:
         st.warning("Create a graph first.")
     else:
-        visualize_graph(G, layout_seed=st.session_state.layout_seed)
         st.markdown("Enter a vertex sequence separated by spaces (e.g., `0 1 2 0`).")
         seq_raw = st.text_input("Sequence", "")
         if st.button("Analyze sequence"):
@@ -310,11 +320,14 @@ elif menu.startswith("2"):
                 st.write(f"Is Cycle: {bool(is_cycle)}")
                 epath = [(seq[i], seq[i+1]) for i in range(len(seq)-1)]
                 visualize_graph(G, layout_seed=st.session_state.layout_seed, highlight_edges=epath, highlight_nodes=set(seq))
+        else:
+            visualize_graph(G, layout_seed=st.session_state.layout_seed)
 
 # Panel 3: Subgraph
 elif menu.startswith("3"):
     st.header("Generate Subgraph")
-    G = st.session_state.G
+    import copy
+    G = copy.deepcopy(st.session_state.get("G_original", None))
     if G is None:
         st.warning("Create a graph first.")
     else:
@@ -330,7 +343,8 @@ elif menu.startswith("3"):
 # Panel 4: Identify Special Graph
 elif menu.startswith("4"):
     st.header("Identify Special Graph")
-    G = st.session_state.G
+    import copy
+    G = copy.deepcopy(st.session_state.get("G_original", None))
     if G is None:
         st.warning("Create a graph first.")
     else:
@@ -359,7 +373,8 @@ elif menu.startswith("4"):
 # Panel 5: Isomorphism
 elif menu.startswith("5"):
     st.header("Graph Isomorphism (compare with a 2nd graph)")
-    G1 = st.session_state.G
+    import copy
+    G1 = copy.deepcopy(st.session_state.get("G_original", None))
     if G1 is None:
         st.warning("Create a base graph first.")
     else:
@@ -404,7 +419,8 @@ elif menu.startswith("5"):
 # Panel 6: Operations
 elif menu.startswith("6"):
     st.header("Graph Operations")
-    G = st.session_state.G
+    import copy
+    G = copy.deepcopy(st.session_state.get("G_original", None))
     if G is None:
         st.warning("Create a graph first.")
     else:
@@ -426,19 +442,50 @@ elif menu.startswith("6"):
                 else:
                     H = parse_adjacency_matrix(t2, directed=directed2, multigraph=multigraph2)
 
+            # Ensure both graphs have the same node set for intersection
+            if need_second and op == "Intersection":
+                all_nodes = set(G.nodes()) | set(H.nodes())
+                for n in all_nodes:
+                    if n not in G:
+                        G.add_node(n)
+                    if n not in H:
+                        H.add_node(n)
+
             if op == "Union (compose)":
+                # If both graphs have weights for the same edge, keep the max weight
                 R = nx.compose(G, H)
+                for u, v in R.edges():
+                    w1 = G[u][v].get('weight') if G.has_edge(u, v) else None
+                    w2 = H[u][v].get('weight') if H.has_edge(u, v) else None
+                    if w1 is not None and w2 is not None:
+                        R[u][v]['weight'] = max(w1, w2)
+                    elif w1 is not None:
+                        R[u][v]['weight'] = w1
+                    elif w2 is not None:
+                        R[u][v]['weight'] = w2
             elif op == "Intersection":
+                # Only keep edges present in both, and keep the min weight if both have weights
                 R = nx.intersection(G, H)
+                for u, v in R.edges():
+                    w1 = G[u][v].get('weight') if G.has_edge(u, v) else None
+                    w2 = H[u][v].get('weight') if H.has_edge(u, v) else None
+                    if w1 is not None and w2 is not None:
+                        R[u][v]['weight'] = min(w1, w2)
+                    elif w1 is not None:
+                        R[u][v]['weight'] = w1
+                    elif w2 is not None:
+                        R[u][v]['weight'] = w2
             elif op == "Complement (current)":
-                if G.is_directed():
-                    st.info("Complement here is defined on a simple undirected copy of the current graph.")
-                    ug = nx.Graph(G.to_undirected())
-                else:
-                    ug = nx.Graph(G)  # drop multi-edges
+                st.info("Complement is always computed on a simple undirected copy of the current graph.")
+                ug = nx.Graph(G.to_undirected()) if G.is_directed() else nx.Graph(G)
                 R = nx.complement(ug)
             elif op == "Cartesian Product":
+                # For weights, set product of weights if both edges have weights, else 1
                 R = nx.cartesian_product(G, H)
+                for (u1, u2), (v1, v2) in R.edges():
+                    w1 = G[u1][v1].get('weight') if G.has_edge(u1, v1) and G[u1][v1].get('weight') is not None else 1
+                    w2 = H[u2][v2].get('weight') if H.has_edge(u2, v2) and H[u2][v2].get('weight') is not None else 1
+                    R[(u1, u2)][(v1, v2)]['weight'] = w1 * w2
             else:
                 st.stop()
 
@@ -449,7 +496,8 @@ elif menu.startswith("6"):
 # Panel 7: Graph-Valued Functions / Properties
 elif menu.startswith("7"):
     st.header("Graph-Valued Functions & Properties")
-    G = st.session_state.G
+    import copy
+    G = copy.deepcopy(st.session_state.get("G_original", None))
     if G is None:
         st.warning("Create a graph first.")
     else:
